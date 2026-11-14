@@ -98,3 +98,11 @@ These benchmarks establish the performance and security baseline for the M12 (By
 
 ### Summary for M12
 The core bottleneck across all PoCs is the VM interpreter's overhead when handling string manipulation, floating-point conversions, and massive memory allocations (e.g., reading whole files into memory). The lack of native `regex`, `index`, and streaming reads forces NovaLang to do heavy lifting in the interpreter rather than in optimized C-level standard library functions.
+
+## After NovaLang 2.4 (std:regex)
+
+The program now finds the status with one `std:regex` pattern instead of `split`. The 50 MB benchmark was not re-run for
+that change. On a 0.95 MB generated log on the VM, parsing went from about 17,800 lines/s (split) to about 4,000 lines/s
+(regex), so expect this benchmark to be roughly 4.5 times slower until NovaLang has a faster matcher (decision D-P7 keeps
+the current one until the P0 validation says otherwise).
+
