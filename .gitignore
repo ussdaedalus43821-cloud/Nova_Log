@@ -3,3 +3,6 @@ __pycache__/
 .DS_Store
 # logs are generated, never committed (tools/make_log.py); the 50 MB benchmark file is ~50 MB
 *.log
+
+# benchmark datasets (regenerate or download; do not commit)
+*_log.txt
