@@ -7,6 +7,7 @@ STEPS = [
     ("behaviour: edge lines, ordering, top-N, on VM, tree-walker and self-hosted", ["tests.test_log"]),
     ("gap probes: what NovaLang lacks, pinned so docs/GAPS.md cannot rot", ["tests.test_gaps"]),
     ("sandbox: restricted profile, default limits, and the G-036 probes", ["tests.test_sandbox"]),
+    ("chaos: a 500 MB line, invalid UTF-8, a .zip renamed to .log", ["tests.test_chaos"]),
 ]
 failed = False
 for title, modules in STEPS:
