@@ -37,7 +37,7 @@ def expected_order(counts):
     return [code for code, _ in sorted(counts.items(), key=lambda kv: (-kv[1], int(kv[0])))]
 
 
-def run(log, engine="vm", profile=None, extra=(), cwd=None, process=True, clock=True, read_dir=None):
+def run(log, engine="vm", profile=None, extra=(), cwd=None, process=True, clock=True, read_dir=None, regex=True):
     """Run nova_log.nova on `log`. engine: vm | tree | bootstrap (self-hosted, CLI only).
     profile=None is the CLI default (trusted); "restricted" grants only what the program needs."""
     args = [sys.executable, NOVA]
@@ -49,6 +49,8 @@ def run(log, engine="vm", profile=None, extra=(), cwd=None, process=True, clock=
             args += ["--allow-process"]
         if clock:
             args += ["--allow-clock"]
+        if regex:
+            args += ["--allow-regex"]  # std:regex declares the `regex` capability while the matcher is new
     if engine == "bootstrap":
         args += ["--bootstrap"]  # must come last before the program: docs/GAPS.md (G-034 in Nova_Sort)
     args += [PROGRAM, log] + list(extra)

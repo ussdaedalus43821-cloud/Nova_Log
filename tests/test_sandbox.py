@@ -47,6 +47,12 @@ class Restricted(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("undefined name 'args'", done.stderr + done.stdout)
 
+    def test_without_the_regex_grant_the_import_is_refused(self):
+        # std:regex declares the `regex` capability, so the import itself fails, before any line is read
+        done = c.run(self.log, profile="restricted", regex=False)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("std:regex needs the 'regex' capability", done.stderr + done.stdout)
+
     def test_a_file_outside_the_read_grant_is_refused(self):
         other = c.tempdir()
         self.addCleanup(c.cleanup, other)
@@ -91,7 +97,7 @@ class StringLimit(unittest.TestCase):
 
 
 class Source(unittest.TestCase):
-    """The program keeps to what the brief allows: split, slicing and len, no regex, no import, no write."""
+    """The program keeps to what the brief allows: one standard import (std:regex), no Python, no write."""
 
     def code(self):
         import re
@@ -100,16 +106,81 @@ class Source(unittest.TestCase):
         source = re.sub(r"#[^\n]*", "", source)
         return re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', source)
 
-    def test_no_regex_import_python_or_file_writes(self):
+    def test_the_only_import_is_std_regex(self):
+        import re
+        with open(c.PROGRAM, encoding="utf-8") as f:
+            imports = [line.strip() for line in f if line.lstrip().startswith("import")]
+        self.assertEqual(imports, ['import "std:regex" as re'])
+        self.assertEqual(len(re.findall(r"\bimport\b", self.code())), 1, "an import in the middle of the program")
+
+    def test_no_python_or_file_writes(self):
         import re
         code = self.code()
-        for name in ["regex", "import", "python", "write", "remove", "delete", "rename", "copy", "append", "mkdir", "stdin", "env"]:
+        for name in ["python", "write", "remove", "delete", "rename", "copy", "append", "mkdir", "stdin", "env"]:
             self.assertIsNone(re.search(r"\b%s\b" % name, code), "nova_log.nova uses " + name)
 
-    def test_it_uses_split_slicing_and_len(self):
+    def test_the_status_is_found_by_one_std_regex_pattern(self):
         code = self.code()
-        for name in ["split(", "len(", "[:"]:
-            self.assertIn(name, code)
+        self.assertEqual(code.count("re.match("), 1)
+        self.assertNotIn("status_of", code)
+        self.assertNotIn("split(", code)  # the hand-written split-based parser is gone (split_lines stays)
+
+
+def split_status(line):
+    """The parser the program had before std:regex, line for line, as the oracle: (status, strategy) or ("", 0)."""
+    def is_status(t):
+        return len(t) == 3 and t[0] in "12345" and t[1] in "0123456789" and t[2] in "0123456789"
+
+    def words(t):  # NovaLang's split(text): the six ASCII whitespace characters, empty pieces dropped
+        import re
+        return [w for w in re.split(r"[ \t\n\r\f\v]+", t) if w]
+
+    parts = line.split('"')
+    n = len(parts)
+    if n >= 3:
+        w = words(parts[2])
+        if w and is_status(w[0]):
+            return w[0], 1
+    if n >= 6:
+        w = words(parts[n - 5])
+        if w and is_status(w[0]):
+            return w[0], 2
+    return "", 0
+
+
+class Pattern(unittest.TestCase):
+    """The STATUS pattern, run by NovaLang's std:regex on all three engines, gives exactly what the split-based parser gave:
+    the same status and the same strategy (1: after the second quote, 2: counted from the end), on hand-picked and random lines."""
+
+    def test_the_pattern_agrees_with_the_old_split_parser(self):
+        import json, random, re, subprocess, sys
+        with open(c.PROGRAM, encoding="utf-8") as f:
+            source = f.read()
+        pattern_line = re.search(r"^let STATUS = .*$", source, re.M).group(0)
+        lines = ['1.2.3.4 - - [t] "GET / HTTP/1.1" 200 5 "-" "ua"', '1.2.3.4 - - [t] "GET /odd"path HTTP/1.1" 404 5 "-" "ua"',
+                 '"x" \t301\t5', '"x" 600 5', '"x" 2000', '"x" 20 5', '"x" 099', '"a"503', '"a" 503', '"a""b" 503 "x" "y"',
+                 '"a"b"c" 302 "x" "y"', '"a" "b"c"d" 502 "r" "u"', '"x" 500"y" "z"', '"q" \x0b201 x', '"q"  201 x',
+                 '"a"b"c"d"e" 304 "f" "g"', '"x"y" 200 "r" "u"', '"a"  ', '"a"" 200', 'no quotes 200', '"', '""', '"""']
+        rng = random.Random(37)
+        pieces = ['"', " ", "200", "404", "5", "a", "\t", "GET", "-", '"-"', "301", "1234", "5xx"]
+        lines += ["".join(rng.choice(pieces) for _ in range(rng.randint(1, 14))) for _ in range(4000)]
+        want = [list(split_status(l)) for l in lines]
+        d = c.tempdir()
+        self.addCleanup(c.cleanup, d)
+        c.write(d, "lines.json", json.dumps(lines))  # NovaLang has no \\u escape, so the lines go through a file, not a literal
+        program = ('import "std:regex" as re\n' + pattern_line + "\nlet lines = json.loads(read(\"lines.json\"))\n"
+                   "for line in lines {\n"
+                   "    let m = re.match(STATUS, line)\n"
+                   "    if type(m) != \"dict\" {\n        print(json.dumps([\"\", 0]))\n"
+                   "    } else if type(m.groups[0]) == \"string\" {\n        print(json.dumps([m.groups[0], 1]))\n"
+                   "    } else {\n        print(json.dumps([m.groups[1], 2]))\n    }\n}\n")
+        path = c.write(d, "pattern.nova", program)
+        for engine, flags in (("vm", []), ("tree", ["--tree-walk"]), ("bootstrap", ["--bootstrap"])):
+            with self.subTest(engine=engine):
+                done = subprocess.run([sys.executable, c.NOVA] + flags + [path], capture_output=True, text=True, timeout=600, cwd=d)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertEqual([json.loads(g) for g in done.stdout.splitlines()], want)
+        self.assertGreater(sum(1 for w in want if w[1] == 2), 10)  # the count-from-the-end alternative is exercised
 
 
 if __name__ == "__main__":

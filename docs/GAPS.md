@@ -8,6 +8,11 @@ G-027 to G-035), so these start at G-036.
 
 Written against NovaLang v2.2.0 (`develop` at f458f1d). Entries marked **M13** are the ones to fix there.
 
+> **Status after NovaLang 2.4 (M14 slice P1):** G-037 has a library route. `std:regex` has captures and `std:text` has
+> `find`/`starts_with`, and the program now finds the status with one `std:regex` pattern: `status_of` and `is_status` are
+> deleted, and the report is byte for byte the same. The cost is the `regex` grant (`--allow-regex`) and speed: NovaLang's
+> matcher is about 4.5 times slower than the two `split`s were. The entries below are the record of what the program did before.
+
 **How to read an entry.** *Tried* is what was attempted and the exact result. *Workaround* says what the code does
 instead and **who does the work**: `program` (nova_log.nova), `host` (a Python launcher: none here) or `none` (cannot
 be done). *Probe* is a reproducible check in `tests/`; the ones marked "gap probe" pass while the gap exists and fail

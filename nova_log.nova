@@ -2,18 +2,19 @@
 #
 #   python3 novalang/novalang.py nova_log.nova ACCESS.LOG [TOP_N]
 #
-# The whole tool is this one NovaLang program: no Python host, no imports, no regular expressions. The
-# combined log format is
+# The whole tool is this one NovaLang program: no Python host, and the only import is NovaLang's own std:regex.
+# The combined log format is
 #   ip - user [time] "METHOD /path HTTP/1.1" STATUS BYTES "referrer" "agent"
-# and the status is the first word after the second quote. NovaLang has no capture groups and no
-# find()/index_of() (docs/GAPS.md G-037), so the line is split on the quote character and counted
-# from either end.
+# and the status is the first word after the second quote. Before NovaLang 2.3 there were no capture groups
+# and no find()/index_of() (docs/GAPS.md G-037, G-003 in Nova_Stats), so the line was split on the quote
+# character and counted from either end by hand; one std:regex pattern with captures now does both.
 #
-# It reads with `read` and nothing else, and needs only `process` (for args and exit) and, if it is
-# there, `clock` (for the timings). Under the `restricted` profile that is `--allow-read DIR
-# --allow-process`; a log over the 1,000,000-character `string.read` limit is refused (G-036).
+# It reads with `read` and nothing else, and needs `process` (for args and exit), `regex` (std:regex declares
+# it while the matcher is new) and, if it is there, `clock` (for the timings). Under the `restricted` profile
+# that is `--allow-read DIR --allow-process --allow-regex`; a log over the 1,000,000-character `string.read`
+# limit is refused (G-036).
 
-let DIGITS = "0123456789"
+import "std:regex" as re
 
 let NAMES = {
     "200": "OK", "201": "Created", "204": "No Content", "206": "Partial Content",
@@ -60,38 +61,16 @@ def seconds_text(ms) {
 
 # ---- parsing ----
 
-# num() throws on text that is not a number and accepts more than digits (" 7", "+5", "0200"; G-039), and
-# there is no way to ask "is this a number?" without a try block, so "three digits, 100 to 599" is
-# tested by hand, one character at a time.
-def is_status(text) {
-    if len(text) != 3 {
-        return false
-    }
-    return text[0] in "12345" and text[1] in DIGITS and text[2] in DIGITS
-}
-
-# The status of one line, or "" if the line has none. Two strategies, because a quote inside the
-# request ("GET /odd\"path HTTP/1.1") moves every quote-delimited piece by one:
-#   1. the first word after the second quote (the usual case), then
-#   2. counting from the end: the pieces after it are  referrer, " ", agent, "" (so index n - 5).
-# Returns [status, strategy] and strategy is 1 or 2.
-def status_of(line) {
-    let parts = split(line, "\"")
-    let n = len(parts)
-    if n >= 3 {
-        let words = split(parts[2])
-        if len(words) >= 1 and is_status(words[0]) {
-            return [words[0], 1]
-        }
-    }
-    if n >= 6 {
-        let words = split(parts[n - 5])
-        if len(words) >= 1 and is_status(words[0]) {
-            return [words[0], 2]
-        }
-    }
-    return ["", 0]
-}
+# The status of a line, as one std:regex pattern with two alternatives. They are the two ways of finding it, and the
+# first that matches wins, because a quote inside the request ("GET /odd\"path HTTP/1.1") moves every
+# quote-delimited piece by one:
+#   1. after the second quote of the line: optional spaces, then the status (the usual case);
+#   2. counting from the end: the quote-delimited piece that has exactly four more quotes after it
+#      (referrer, " ", agent, ""), so it is found whatever the request holds.
+# A status is three characters, 100 to 599, ended by a space, a quote or the end of the line. \s is the six ASCII
+# whitespace characters that split() also uses. The dialect has no look-ahead, so the character that ends the
+# status is matched, not looked at. Group 1 is set by the first alternative and group 2 by the second.
+let STATUS = "^[^\"]*\"[^\"]*\"\\s*([1-5]\\d\\d)(?:[\\s\"]|$)|\"\\s*([1-5]\\d\\d)(?:\\s[^\"]*)?\"[^\"]*\"[^\"]*\"[^\"]*\"[^\"]*$"
 
 # ---- the program ----
 
@@ -137,17 +116,18 @@ for line in lines {
     if line == "" {
         blank = blank + 1
     } else {
-        let found = status_of(line)
-        if found[1] == 0 {
+        let m = re.match(STATUS, line)
+        if type(m) != "dict" {
             unparsed = unparsed + 1
             if len(samples) < 5 {
                 samples = samples + [line[:100]]
             }
         } else {
-            if found[1] == 2 {
+            let code = m.groups[0]
+            if type(code) != "string" {
                 by_end = by_end + 1
+                code = m.groups[1]
             }
-            let code = found[0]
             if code in counts {
                 counts[code] = counts[code] + 1
             } else {

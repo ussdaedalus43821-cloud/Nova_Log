@@ -1,7 +1,7 @@
 # Nova_Log
 
 > **The third proof of concept for [NovaLang](https://github.com/ussdaedalus43821-cloud/Nova_Lang), after [Nova_Stats](https://github.com/ussdaedalus43821-cloud/Nova_Stats) and [Nova_Sort](https://github.com/ussdaedalus43821-cloud/Nova_Sort).**
-> A web-server log analyzer written entirely in NovaLang: one program, no Python host, no regular expressions.
+> A web-server log analyzer written entirely in NovaLang: one program, no Python host; since NovaLang 2.4 it finds the status with one `std:regex` pattern.
 > It tests **text processing at scale**.
 
 It reads an access log, finds the HTTP status code on every line, counts them, and prints a table sorted by frequency.
@@ -47,15 +47,22 @@ Nova_Log: access_2mb.log
 Needs only Python 3 to start NovaLang. Logs are made by `python3 tools/make_log.py OUT.log [MEGABYTES]` (seeded,
 reproducible, includes awkward lines on purpose); they are never committed.
 
-## How it finds the status without regex
+## How it finds the status
 
 The combined log format is `ip - user [time] "METHOD /path HTTP/1.1" STATUS BYTES "referrer" "agent"`.
-NovaLang has no `index`/`find` and no regex captures here, so the program uses only `split`, slicing and `len`:
+Since NovaLang 2.4 the status is found by **one `std:regex` pattern** (`STATUS` in `nova_log.nova`) with two alternatives:
 
-1. `split(line, "\"")`: the status is the first word of the third piece (`status_of`, two lines).
-2. It is accepted only if it is exactly three digits in 100-599 (checked by hand: `num` throws on bad text).
-3. If not, because a quote inside the request shifted the pieces, count **from the end** of the line instead.
-4. If that fails too, the line is counted as *unparsed* and the first five are shown. Nothing is guessed.
+1. after the second quote of the line: optional spaces, then three digits 100-599, ended by a space, a quote or the end
+   of the line (capture group 1);
+2. if a quote inside the request shifted the pieces, counting **from the end**: the quote-delimited piece with exactly
+   four more quotes after it (capture group 2).
+3. If neither matches, the line is counted as *unparsed* and the first five are shown. Nothing is guessed.
+
+Until 2.4 the program did this by hand with `split(line, "\"")`, slicing and `len` (`status_of` and `is_status`,
+because there was no `find` and no regex captures, G-037). Those helpers are deleted. The report is **byte for byte the
+same** on `small_log.txt`, the three large logs, a 0.95 MB generated log and 3,000 random edge lines, on all three
+engines, and `tests/test_sandbox.py` `Pattern` checks the pattern against the old split parser line by line. The
+cost: NovaLang's own regex matcher is slower than two `split`s, about 4,000 lines/s against 17,800 on the VM.
 
 The table is ordered with `sorted()` on one number per code (`count * 1000 + (1000 - code)`), because `sorted` cannot
 order pairs ([G-038](docs/GAPS.md)).
@@ -65,7 +72,7 @@ order pairs ([G-038](docs/GAPS.md)).
 The program only reads, and needs `process` (for `args()`), plus `clock` for the timings if you grant it:
 
 ```bash
-python3 novalang/novalang.py --profile restricted --allow-read LOGDIR --allow-process --allow-clock nova_log.nova LOGDIR/access.log
+python3 novalang/novalang.py --profile restricted --allow-read LOGDIR --allow-process --allow-regex --allow-clock nova_log.nova LOGDIR/access.log
 ```
 
 That works for a log up to **1,000,000 characters**. A larger one stops with `a string cannot grow beyond 1000000
